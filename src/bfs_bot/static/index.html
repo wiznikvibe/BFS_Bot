@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BFS Bot SME Credit Assistant</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell" aria-labelledby="page-title">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">SME credit PoC</p>
+            <h1 id="page-title">BFS Bot Assistant</h1>
+          </div>
+          <span class="status-pill" aria-live="polite">PII redaction enforced</span>
+        </header>
+
+        <form id="ask-form" class="query-panel" aria-label="Ask a question about SME credit or policy">
+          <label for="question">Ask about a synthetic SME customer or policy</label>
+          <div class="input-row">
+            <textarea
+              id="question"
+              name="question"
+              rows="3"
+              maxlength="800"
+              required
+              aria-describedby="question-hint"
+            >For SME-10023, what is the available limit and which privacy policy point applies?</textarea>
+            <button type="submit">Ask</button>
+          </div>
+          <p id="customer-hint" class="hint" role="status">Loading sample customer IDs...</p>
+        </form>
+
+        <section class="answer-grid" aria-live="polite">
+          <article class="panel answer-panel">
+            <h2>Answer</h2>
+            <p id="answer">Submit a query to run the multi-agent flow.</p>
+          </article>
+
+          <article class="panel">
+            <h2>Redacted Customer Context</h2>
+            <pre id="redacted-context" class="context-block">No customer context yet.</pre>
+          </article>
+
+          <article class="panel">
+            <h2>Policy Citations</h2>
+            <ul id="citations" class="list" role="list">
+              <li>No policy citations.</li>
+            </ul>
+          </article>
+
+          <article class="panel">
+            <h2>Agent Trace</h2>
+            <ol id="trace" class="trace-list" role="list">
+              <li class="trace-item">No trace yet.</li>
+            </ol>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
