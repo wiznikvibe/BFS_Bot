@@ -12,6 +12,7 @@ CUSTOMER_ID_RE = re.compile(r"\bC\d{3}\b", re.I)
 INVOICE_ID_RE = re.compile(r"\bINV-\d+\b", re.I)
 
 _PAYMENT_TERMS = ("payment", "paid", "pay ")
+_LAST_PAYMENT_TERMS = ("last payment", "what was my payment", "my last payment")
 _LATEST_TERMS = ("latest", "most recent", "last invoice", "newest")
 _LIST_TERMS = ("list", "show all", "recent invoices")
 _MEMBERSHIP_TERMS = ("membership", "signup", "signed up", "member since", "plan type", " my plan")
@@ -36,7 +37,9 @@ class StructuredDataAgent:
         invoice_id = self._extract_invoice_id(question)
         normalized = question.lower()
 
-        if invoice_id and any(term in normalized for term in _PAYMENT_TERMS):
+        if any(term in normalized for term in _LAST_PAYMENT_TERMS):
+            rows, meta = self._tools.get_latest_payment(session_customer, as_of)
+        elif invoice_id and any(term in normalized for term in _PAYMENT_TERMS):
             rows, meta = self._tools.get_payment_for_invoice(session_customer, invoice_id)
         elif invoice_id:
             rows, meta = self._tools.get_invoice_by_id(session_customer, invoice_id)

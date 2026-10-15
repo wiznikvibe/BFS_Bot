@@ -94,6 +94,20 @@ class StructuredSqlTools:
         rows = self._executor.execute(sql, params)
         return rows, {"tool": "get_payment_for_invoice", "params": params}
 
+    def get_latest_payment(self, customer_id: str, as_of: date) -> ToolResult:
+        params = {"customer_id": customer_id.upper(), "as_of": as_of}
+        sql = (
+            "SELECT "
+            + ", ".join(f"p.{column}" for column in _PAYMENT_COLUMNS)
+            + " FROM payments p "
+            "INNER JOIN invoices i ON i.invoice_id = p.invoice_id "
+            "WHERE i.customer_id = :customer_id AND p.paid_on <= :as_of "
+            "ORDER BY p.paid_on DESC, p.payment_id DESC "
+            "LIMIT 1"
+        )
+        rows = self._executor.execute(sql, params)
+        return rows, {"tool": "get_latest_payment", "params": params}
+
     def list_recent_invoices(
         self,
         customer_id: str,

@@ -42,3 +42,6 @@ bfs_bot = ["static/*"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "eval: scenario matrix and security evaluation tests (may be slower)",
+]

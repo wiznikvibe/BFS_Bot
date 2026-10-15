@@ -88,3 +88,7 @@ def test_data_only_route_without_policy_words() -> None:
 
 def test_policy_only_route_without_personal_invoice() -> None:
     assert classify_route("What is the refund window?") == "policy_only"
+
+
+def test_route_classifier_for_c002_invoice_percent() -> None:
+    assert classify_route("Why was my invoice 10% lower?") == "hybrid"
