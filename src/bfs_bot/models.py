@@ -4,13 +4,19 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-try:
-    from pgvector.sqlalchemy import Vector
-except Exception:  # pragma: no cover - local tests may not have pgvector installed
-    Vector = None
 
 
 class Base(DeclarativeBase):
@@ -18,97 +24,183 @@ class Base(DeclarativeBase):
 
 
 def embedding_column() -> Any:
-    if Vector is None:
-        return mapped_column(JSON, nullable=False)
-    return mapped_column(Vector(384), nullable=False)
+    """JSON list of floats; ranked in Python via cosine_similarity."""
+    return mapped_column(
+        JSON,
+        nullable=False,
+        comment="Embedding vector stored as JSON for portable retrieval ranking.",
+    )
 
 
-class SMECustomer(Base):
-    __tablename__ = "sme_customers"
+class Customer(Base):
+    """Membership identity: plan type and tenure for billing-policy questions."""
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
-    business_name: Mapped[str] = mapped_column(String(160))
-    contact_name: Mapped[str] = mapped_column(String(120))
-    email: Mapped[str] = mapped_column(String(160))
-    phone: Mapped[str] = mapped_column(String(32))
-    pan: Mapped[str] = mapped_column(String(16))
-    gstin: Mapped[str] = mapped_column(String(24))
-    registered_address: Mapped[str] = mapped_column(String(255))
-    industry: Mapped[str] = mapped_column(String(120))
-    region: Mapped[str] = mapped_column(String(80))
-    risk_tier: Mapped[str] = mapped_column(String(8))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-    credit_account: Mapped["CreditAccount"] = relationship(back_populates="customer", uselist=False)
-    transactions: Mapped[list["Transaction"]] = relationship(back_populates="customer")
-    support_cases: Mapped[list["SupportCase"]] = relationship(back_populates="customer")
-
-
-class CreditAccount(Base):
-    __tablename__ = "credit_accounts"
+    __tablename__ = "customers"
+    __table_args__ = {"comment": "Demo customers; membership length and plan drive discount eligibility."}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("sme_customers.id"), index=True)
-    lender_name: Mapped[str] = mapped_column(String(120))
-    account_status: Mapped[str] = mapped_column(String(32))
-    credit_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    utilized_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    available_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    overdue_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
-    next_due_date: Mapped[date] = mapped_column(Date)
+    customer_id: Mapped[str] = mapped_column(
+        String(32),
+        unique=True,
+        index=True,
+        comment="External customer identifier (e.g. C001).",
+    )
+    name: Mapped[str] = mapped_column(String(160), comment="Customer display name.")
+    signup_date: Mapped[date] = mapped_column(
+        Date, comment="Date membership started; used for loyalty tenure."
+    )
+    plan: Mapped[str] = mapped_column(
+        String(32), comment="Billing plan: monthly or annual."
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), comment="Account status (e.g. active)."
+    )
 
-    customer: Mapped[SMECustomer] = relationship(back_populates="credit_account")
-
-
-class Transaction(Base):
-    __tablename__ = "transactions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("sme_customers.id"), index=True)
-    invoice_number: Mapped[str] = mapped_column(String(40), unique=True)
-    supplier_name: Mapped[str] = mapped_column(String(160))
-    invoice_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    due_date: Mapped[date] = mapped_column(Date)
-    repayment_status: Mapped[str] = mapped_column(String(32))
-
-    customer: Mapped[SMECustomer] = relationship(back_populates="transactions")
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="customer")
 
 
-class SupportCase(Base):
-    __tablename__ = "support_cases"
+class Invoice(Base):
+    """Billed amount with applied discount codes and late fees."""
+
+    __tablename__ = "invoices"
+    __table_args__ = {"comment": "Invoices billed to customers; links discounts and fees to line items."}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("sme_customers.id"), index=True)
-    case_number: Mapped[str] = mapped_column(String(40), unique=True)
-    category: Mapped[str] = mapped_column(String(80))
-    status: Mapped[str] = mapped_column(String(40))
-    opened_at: Mapped[datetime] = mapped_column(DateTime)
-    summary: Mapped[str] = mapped_column(Text)
+    invoice_id: Mapped[str] = mapped_column(
+        String(40),
+        unique=True,
+        index=True,
+        comment="External invoice identifier (e.g. INV-1001).",
+    )
+    customer_id: Mapped[str] = mapped_column(
+        ForeignKey("customers.customer_id"),
+        index=True,
+        comment="Customer who was billed.",
+    )
+    invoice_date: Mapped[date] = mapped_column(Date, comment="Date the invoice was issued.")
+    due_date: Mapped[date] = mapped_column(Date, comment="Payment due date.")
+    gross: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), comment="Pre-discount invoice amount."
+    )
+    discount_code: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        comment="Promotional or loyalty code applied, if any.",
+    )
+    discount_amt: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), comment="Discount amount subtracted from gross."
+    )
+    late_fee: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), comment="Late payment fee applied to this invoice."
+    )
+    net: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), comment="Amount due after discounts and fees."
+    )
 
-    customer: Mapped[SMECustomer] = relationship(back_populates="support_cases")
+    customer: Mapped[Customer] = relationship(back_populates="invoices")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice")
 
 
-class PolicyDocumentChunk(Base):
-    __tablename__ = "policy_document_chunks"
+class Payment(Base):
+    """Actual payment against an invoice."""
+
+    __tablename__ = "payments"
+    __table_args__ = {"comment": "Payments received; timing vs due date drives late-fee scenarios."}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    chunk_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    title: Mapped[str] = mapped_column(String(160))
-    section: Mapped[str] = mapped_column(String(180))
-    source_url: Mapped[str] = mapped_column(String(500))
-    text: Mapped[str] = mapped_column(Text)
+    payment_id: Mapped[str] = mapped_column(
+        String(40),
+        unique=True,
+        index=True,
+        comment="External payment identifier.",
+    )
+    invoice_id: Mapped[str] = mapped_column(
+        ForeignKey("invoices.invoice_id"),
+        index=True,
+        comment="Invoice this payment settles.",
+    )
+    paid_on: Mapped[date] = mapped_column(Date, comment="Date payment was received.")
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), comment="Amount paid."
+    )
+
+    invoice: Mapped[Invoice] = relationship(back_populates="payments")
+
+
+class DiscountCode(Base):
+    """Maps a billing code to the policy document that defines it."""
+
+    __tablename__ = "discount_codes"
+    __table_args__ = {
+        "comment": "Discount codes link applied invoice codes to policy doc_id for hybrid Q&A."
+    }
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    discount_code: Mapped[str] = mapped_column(
+        String(40),
+        unique=True,
+        index=True,
+        comment="Code applied on invoices (e.g. LOYALTY10).",
+    )
+    policy_id: Mapped[str] = mapped_column(
+        String(80),
+        comment="Policy document id (doc_id) that defines this code.",
+    )
+
+
+class PolicyChunk(Base):
+    """Vector-indexed policy text with version and effective dating."""
+
+    __tablename__ = "policy_chunks"
+    __table_args__ = {
+        "comment": "Chunked policy documents for RAG; metadata supports version and date filtering."
+    }
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_id: Mapped[str] = mapped_column(
+        String(80),
+        index=True,
+        comment="Logical policy document identifier.",
+    )
+    version: Mapped[str] = mapped_column(
+        String(16), comment="Policy version label (e.g. v2, v3)."
+    )
+    section: Mapped[str] = mapped_column(
+        String(180), comment="Section heading within the document."
+    )
+    effective_from: Mapped[date] = mapped_column(
+        Date, comment="First date this chunk is in force."
+    )
+    effective_to: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Last date in force, inclusive; null if still current.",
+    )
+    text: Mapped[str] = mapped_column(Text, comment="Chunk body text for retrieval and citations.")
     embedding: Mapped[Any] = embedding_column()
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    is_injection_probe: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        comment="True for test-only prompt-injection probe chunks.",
+    )
 
 
-class AgentAuditEvent(Base):
-    __tablename__ = "agent_audit_events"
+class AuditEvent(Base):
+    """Supervisor and agent audit trail for demo observability."""
+
+    __tablename__ = "audit_events"
+    __table_args__ = {"comment": "Query routing, tool use, and outcomes for compliance demo."}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    query_id: Mapped[str] = mapped_column(String(64), index=True)
-    agent: Mapped[str] = mapped_column(String(80))
-    status: Mapped[str] = mapped_column(String(40))
-    detail: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
+    query_id: Mapped[str] = mapped_column(
+        String(64), index=True, comment="Correlates events for one user question."
+    )
+    agent: Mapped[str] = mapped_column(
+        String(80), comment="Component that emitted the event (supervisor, structured, policy)."
+    )
+    status: Mapped[str] = mapped_column(String(40), comment="Outcome or phase label.")
+    detail: Mapped[str] = mapped_column(Text, comment="Human-readable or JSON detail payload.")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), comment="Event timestamp."
+    )
