@@ -23,12 +23,23 @@ class AgentOrchestrator:
         self.policy_repository = policy_repository
         self.llm_client = llm_client
 
-    def answer(self, question: str) -> AnswerResponse:
+    def answer(self, question: str, customer_id: str | None = None) -> AnswerResponse:
         trace: list[AgentStep] = []
         normalized_question = question.lower()
-        customer_id = self._extract_customer_id(question)
+        question_customer_id = self._extract_customer_id(question)
+        bound_customer_id = customer_id.upper() if customer_id else None
 
-        if customer_id and any(term in normalized_question for term in RAW_PII_TERMS):
+        if question_customer_id:
+            resolved_customer_id = question_customer_id
+            id_source = "question"
+        elif bound_customer_id:
+            resolved_customer_id = bound_customer_id
+            id_source = "bound"
+        else:
+            resolved_customer_id = None
+            id_source = "none"
+
+        if resolved_customer_id and any(term in normalized_question for term in RAW_PII_TERMS):
             trace.append(
                 AgentStep(
                     agent="compliance_guard_agent",
@@ -42,29 +53,41 @@ class AgentOrchestrator:
                 trace=trace,
             )
 
+        if resolved_customer_id:
+            router_detail = (
+                f"Classified query as customer+policy using {id_source} customer id "
+                f"{resolved_customer_id}."
+            )
+        else:
+            router_detail = "Classified query as policy-only."
+
         trace.append(
             AgentStep(
                 agent="router_agent",
                 status="passed",
-                detail="Classified query as customer+policy." if customer_id else "Classified query as policy-only.",
+                detail=router_detail,
             )
         )
 
         customer_record = None
         redacted_customer_context = None
         redaction = RedactionReport(status="not_required")
-        if customer_id:
-            customer_record = self.customer_repository.get_customer_by_id(customer_id)
+        if resolved_customer_id:
+            customer_record = self.customer_repository.get_customer_by_id(resolved_customer_id)
             trace.append(
                 AgentStep(
                     agent="customer_retrieval_agent",
                     status="passed" if customer_record else "not_found",
-                    detail=f"Retrieved customer record for {customer_id}." if customer_record else f"No customer found for {customer_id}.",
+                    detail=(
+                        f"Retrieved customer record for {resolved_customer_id}."
+                        if customer_record
+                        else f"No customer found for {resolved_customer_id}."
+                    ),
                 )
             )
             if not customer_record:
                 return AnswerResponse(
-                    answer=f"I couldn't find a dummy customer record for {customer_id}.",
+                    answer=f"I couldn't find a dummy customer record for {resolved_customer_id}.",
                     redaction=redaction,
                     trace=trace,
                 )
@@ -123,4 +146,3 @@ class AgentOrchestrator:
     def _extract_customer_id(question: str) -> str | None:
         match = CUSTOMER_ID_RE.search(question)
         return match.group(0).upper() if match else None
-
