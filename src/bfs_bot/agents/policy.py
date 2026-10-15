@@ -41,6 +41,7 @@ class PolicyRetrievalAgent:
         *,
         limit: int = 4,
         doc_id: str | None = None,
+        include_injection_probes: bool = False,
     ) -> PolicyResult:
         session = self._session_factory()
         try:
@@ -50,7 +51,7 @@ class PolicyRetrievalAgent:
                 as_of=as_of,
                 limit=limit,
                 doc_id=doc_id,
-                include_injection_probes=False,
+                include_injection_probes=include_injection_probes,
             )
             passages = [_chunk_to_passage(chunk) for chunk in chunks]
             return PolicyResult(passages=passages, as_of=as_of)
@@ -59,11 +60,7 @@ class PolicyRetrievalAgent:
 
 
 def _chunk_to_passage(chunk: PolicyChunk) -> PolicyPassage:
-    body = chunk.text
-    if chunk.is_injection_probe:
-        wrapped = body
-    else:
-        wrapped = sanitize_retrieved_text(body)
+    wrapped = sanitize_retrieved_text(chunk.text)
     return PolicyPassage(
         doc_id=chunk.doc_id,
         version=chunk.version,

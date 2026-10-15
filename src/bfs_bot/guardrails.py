@@ -7,6 +7,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from bfs_bot.demo_data.generator import NAMED_CUSTOMERS
+
 _FORBIDDEN_SQL = re.compile(
     r"\b("
     r"INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|MERGE|"
@@ -22,6 +24,21 @@ _SCOPE_REFUSAL_MESSAGE = (
     "Cross-customer requests cannot be processed."
 )
 
+READONLY_ASSISTANT_MESSAGE = (
+    "I can only look up billing and policy information for your account. "
+    "I cannot apply discounts, issue refunds, or modify records."
+)
+
+_CUSTOMER_ID_RE = re.compile(r"\bC\d{3}\b", re.I)
+
+_WRITE_ACTION_RE = re.compile(
+    r"\b("
+    r"apply|add|grant|issue|post|create|update|change|delete|remove|"
+    r"credit|adjust|modify|set|enable|disable"
+    r")\b",
+    re.I,
+)
+
 
 class ScopeViolation(Exception):
     """Raised when a request violates customer or session scope."""
@@ -33,6 +50,59 @@ class CrossUserScopeError(ScopeViolation):
 
 class ReadonlyQueryError(Exception):
     """Raised when SQL is not an allowed read-only SELECT."""
+
+
+def is_write_action_request(question: str) -> bool:
+    """True when the user asks the assistant to mutate billing or account state."""
+    normalized = question.lower()
+    if not _WRITE_ACTION_RE.search(question):
+        return False
+    mutation_targets = (
+        "discount",
+        "loyalty",
+        "refund",
+        "credit",
+        "account",
+        "invoice",
+        "record",
+        "payment",
+        "fee",
+        "balance",
+        "plan",
+    )
+    return any(target in normalized for target in mutation_targets)
+
+
+def _question_references_display_name(question_lower: str, display_name: str) -> bool:
+    name = display_name.strip().lower()
+    if not name:
+        return False
+    if name in question_lower:
+        return True
+    parts = name.split()
+    if len(parts) >= 2:
+        first, last = parts[0], parts[-1]
+        if f"{first}'s" in question_lower and last in question_lower:
+            return True
+        if f"{last}'s" in question_lower and first in question_lower:
+            return True
+    return False
+
+
+def assert_question_customer_isolation(session_id: str, question: str) -> None:
+    """Refuse cross-customer questions by explicit id or another named persona."""
+    match = _CUSTOMER_ID_RE.search(question)
+    if match:
+        assert_customer_scope(session_id, match.group(0))
+
+    session = str(session_id).strip().upper()
+    question_lower = question.lower()
+    for row in NAMED_CUSTOMERS:
+        other_id = row.customer_id.upper()
+        if other_id == session:
+            continue
+        if _question_references_display_name(question_lower, row.name):
+            raise CrossUserScopeError(_SCOPE_REFUSAL_MESSAGE)
 
 
 def assert_customer_scope(session_id: str, requested_id: str | None) -> str:
@@ -94,3 +164,17 @@ def sanitize_retrieved_text(text_value: str) -> str:
         f"{body}\n"
         f"{_UNTRUSTED_CLOSE}"
     )
+
+
+def policy_covers_question_topic(question: str, passage_texts: list[str]) -> bool:
+    """Return False when the question names a topic absent from retrieved passages."""
+    normalized = question.lower()
+    topic_groups: tuple[tuple[str, ...], ...] = (
+        ("cryptocurrency", "crypto", "bitcoin", "blockchain", "ethereum"),
+    )
+    corpus = " ".join(passage_texts).lower()
+    for terms in topic_groups:
+        if any(term in normalized for term in terms):
+            if not any(term in corpus for term in terms):
+                return False
+    return True

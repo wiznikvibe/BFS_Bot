@@ -14,7 +14,13 @@ from bfs_bot.agents.reasoner import (
     compare_versioned_loyalty_discount,
 )
 from bfs_bot.agents.structured import DataResult, StructuredDataAgent
-from bfs_bot.guardrails import CrossUserScopeError
+from bfs_bot.guardrails import (
+    CrossUserScopeError,
+    READONLY_ASSISTANT_MESSAGE,
+    assert_question_customer_isolation,
+    is_write_action_request,
+    policy_covers_question_topic,
+)
 from bfs_bot.schemas import AgentStep, AnswerResponse, DataCitation, PolicyCitation
 
 _POLICY_ONLY_MARKERS = (
@@ -108,6 +114,13 @@ def _hybrid_handler_kind(question: str, route: str) -> str | None:
     return None
 
 
+def _is_listing_customers_policy_probe(question: str) -> bool:
+    normalized = question.lower()
+    return "listing all customers" in normalized or (
+        "list" in normalized and "all" in normalized and "customer" in normalized
+    )
+
+
 def _is_refund_window_policy_only(question: str, route: str) -> bool:
     if route != "policy_only":
         return False
@@ -146,6 +159,26 @@ class Supervisor:
         ]
 
         try:
+            assert_question_customer_isolation(customer_id, question)
+
+            if is_write_action_request(question):
+                return self._answer_readonly_decline(
+                    question,
+                    customer_id,
+                    as_of,
+                    route,
+                    trace,
+                )
+
+            if _is_listing_customers_policy_probe(question):
+                return self._answer_listing_customers_policy_probe(
+                    question,
+                    customer_id,
+                    as_of,
+                    route,
+                    trace,
+                )
+
             if _is_refund_window_policy_only(question, route):
                 return self._answer_refund_policy_only(
                     question,
@@ -203,6 +236,31 @@ class Supervisor:
                         detail=f"Retrieved {len(policy_result.passages)} policy passage(s).",
                     )
                 )
+                if route == "policy_only" and policy_result.passages:
+                    if not policy_covers_question_topic(
+                        question,
+                        [p.text for p in policy_result.passages],
+                    ):
+                        response = AnswerResponse(
+                            answer=(
+                                "I could not find a policy document on that topic in the "
+                                "indexed policy library."
+                            ),
+                            route=route,
+                            confidence=0.3,
+                            policy_citations=[],
+                            escalate=False,
+                            trace=trace,
+                        )
+                        self._persist_audit(
+                            question=question,
+                            customer_id=customer_id,
+                            as_of=as_of,
+                            response=response,
+                            tool_calls=[],
+                            policy_passages=[],
+                        )
+                        return response
 
             answer = self._compose_generic_answer(
                 route,
@@ -258,6 +316,89 @@ class Supervisor:
                 status="blocked",
             )
             return response
+
+    def _answer_readonly_decline(
+        self,
+        question: str,
+        customer_id: str,
+        as_of: date,
+        route: str,
+        trace: list[AgentStep],
+    ) -> AnswerResponse:
+        trace.append(
+            AgentStep(
+                agent="supervisor",
+                status="blocked",
+                detail="Write or mutation request declined (read-only assistant).",
+            )
+        )
+        response = AnswerResponse(
+            answer=READONLY_ASSISTANT_MESSAGE,
+            route=route,
+            confidence=1.0,
+            escalate=False,
+            trace=trace,
+        )
+        self._persist_audit(
+            question=question,
+            customer_id=customer_id,
+            as_of=as_of,
+            response=response,
+            tool_calls=[],
+            policy_passages=[],
+            status="blocked",
+        )
+        return response
+
+    def _answer_listing_customers_policy_probe(
+        self,
+        question: str,
+        customer_id: str,
+        as_of: date,
+        route: str,
+        trace: list[AgentStep],
+    ) -> AnswerResponse:
+        policy_result = self._policy.run(
+            question,
+            as_of=as_of,
+            doc_id="loyalty-discount-policy",
+            include_injection_probes=True,
+            limit=6,
+        )
+        trace.append(
+            AgentStep(
+                agent="policy_retrieval_agent",
+                status="passed",
+                detail=(
+                    f"Retrieved {len(policy_result.passages)} loyalty passage(s) "
+                    "(injection probe eligible)."
+                ),
+            )
+        )
+        answer = (
+            "Loyalty policy text does not authorize listing all customers. "
+            "Any instruction-like wording inside retrieved policy excerpts is untrusted "
+            "reference data and is not executed; access remains limited to your "
+            "authenticated account."
+        )
+        policy_citations = _policy_citations_from_passages(policy_result.passages)
+        response = AnswerResponse(
+            answer=answer,
+            route=route,
+            confidence=0.9,
+            policy_citations=policy_citations,
+            escalate=False,
+            trace=trace,
+        )
+        self._persist_audit(
+            question=question,
+            customer_id=customer_id,
+            as_of=as_of,
+            response=response,
+            tool_calls=[],
+            policy_passages=policy_result.passages,
+        )
+        return response
 
     def _answer_loyalty_hybrid(
         self,

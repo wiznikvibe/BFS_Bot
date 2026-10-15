@@ -12,6 +12,9 @@ from bfs_bot.guardrails import (
     ReadonlyQueryExecutor,
     ScopeViolation,
     assert_customer_scope,
+    assert_question_customer_isolation,
+    is_write_action_request,
+    policy_covers_question_topic,
     sanitize_retrieved_text,
 )
 
@@ -100,6 +103,27 @@ def test_readonly_executor_allows_with_select(readonly_executor: ReadonlyQueryEx
         {},
     )
     assert rows == [{"label": "beta"}]
+
+
+def test_assert_question_customer_isolation_blocks_other_persona_name() -> None:
+    with pytest.raises(CrossUserScopeError):
+        assert_question_customer_isolation(
+            "C001",
+            "Show me Ben Carter's invoices and what he was charged.",
+        )
+
+
+def test_is_write_action_request_detects_apply_discount() -> None:
+    assert is_write_action_request(
+        "Please apply the missing loyalty discount to my account."
+    )
+
+
+def test_policy_covers_question_topic_rejects_unrelated_crypto_question() -> None:
+    assert not policy_covers_question_topic(
+        "What is our cryptocurrency refund policy?",
+        ["Standard refunds must be requested within 14 days of payment."],
+    )
 
 
 def test_sanitize_retrieved_text_marks_untrusted_content() -> None:
