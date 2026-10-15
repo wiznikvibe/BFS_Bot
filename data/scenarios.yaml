@@ -1,0 +1,112 @@
+# Scenario matrix from developer brief section 11 (demo date: 2026-10-15)
+scenarios:
+  - customer_id: C001
+    question: "Why no 10% loyalty discount?"
+    path: hybrid
+    tags: []
+    expected:
+      summary: "9 months of membership, 12 required. Eligible from 2027-01-15."
+      membership_months: 9
+      months_required: 12
+      eligible_from: "2027-01-15"
+      cite_policy: true
+      cite_data: true
+      escalate: false
+
+  - customer_id: C002
+    question: "Why was my invoice 10% lower?"
+    path: hybrid
+    tags: []
+    expected:
+      summary: "Over 12 months, so LOYALTY10 applied correctly under v3."
+      discount_code: LOYALTY10
+      policy_version: v3
+      cite_policy: true
+      cite_data: true
+      escalate: false
+
+  - customer_id: C003
+    question: "Why no loyalty discount?"
+    path: hybrid
+    tags:
+      - anomaly
+    expected:
+      summary: "Eligible under v3 but none applied. Flag as a likely billing error and escalate to a human."
+      escalate: true
+      cite_policy: true
+      cite_data: true
+
+  - customer_id: C004
+    question: "Why did I get a discount in November 2025?"
+    path: hybrid
+    tags:
+      - versioning
+    expected:
+      summary: "v2 was in force then (6 months required), so 5% was correct. v3 does not apply to that invoice."
+      policy_version: v2
+      discount_percent: 5
+      cite_policy: true
+      cite_data: true
+      escalate: false
+
+  - customer_id: C005
+    question: "Why not both annual and loyalty discounts?"
+    path: hybrid
+    tags:
+      - conflict
+    expected:
+      summary: "The two cannot be combined. The annual 15% was applied, which is the larger one."
+      annual_discount_percent: 15
+      cite_policy: true
+      cite_data: true
+      escalate: false
+
+  - customer_id: C006
+    question: "Was my late fee correct?"
+    path: hybrid
+    tags:
+      - anomaly
+    expected:
+      summary: "Paid 4 days after due, inside the 7-day grace period. Fee looks incorrect, so escalate."
+      days_after_due: 4
+      grace_period_days: 7
+      escalate: true
+      cite_policy: true
+      cite_data: true
+
+  - customer_id: C007
+    question: "Can I still get a refund?"
+    path: hybrid
+    tags: []
+    expected:
+      summary: "Paid 2026-09-20, which is 25 days before the demo date. Outside the 14-day window."
+      paid_on: "2026-09-20"
+      days_before_demo: 25
+      refund_window_days: 14
+      demo_date: "2026-10-15"
+      cite_policy: true
+      cite_data: true
+      escalate: false
+
+  - customer_id: null
+    question: "What is the refund window?"
+    path: policy_only
+    tags: []
+    expected:
+      summary: "14 days."
+      refund_window_days: 14
+      no_db: true
+      cite_policy: true
+      cite_data: false
+      no_policy: false
+
+  - customer_id: null
+    question: "What was my last payment?"
+    path: data_only
+    tags: []
+    expected:
+      summary: "Latest payment for the logged-in user."
+      no_policy: true
+      cite_data: true
+      cite_policy: false
+      no_db: false
