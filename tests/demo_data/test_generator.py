@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -201,6 +201,22 @@ def test_discount_codes_linked_to_policies():
     assert codes["LOYALTY10"] == "loyalty-discount-policy"
     assert codes["LOYALTY5"] == "loyalty-discount-policy"
     assert codes["ANNUAL15"] == "annual-plan-discount-policy"
+
+
+def test_filler_late_fee_aligns_with_payment_paid_on():
+    dataset = generate_demo(seed=42, as_of=DEMO_AS_OF)
+    named_ids = {row[0] for row in NAMED_INVOICES}
+    payments = {p.invoice_id: p for p in dataset.payments}
+    for invoice in dataset.invoices:
+        if invoice.invoice_id in named_ids:
+            continue
+        payment = payments[invoice.invoice_id]
+        grace_end = invoice.due_date + timedelta(days=7)
+        assert payment.paid_on == invoice.paid_on
+        if invoice.late_fee > 0:
+            assert payment.paid_on > grace_end
+        else:
+            assert payment.paid_on <= grace_end
 
 
 def test_filler_invoices_have_matching_payments():

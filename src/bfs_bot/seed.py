@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from bfs_bot.config import settings
 from bfs_bot.database import SessionLocal, create_schema
-from bfs_bot.demo_data.generator import DemoDataset, generate_demo
+from bfs_bot.demo_data.generator import (
+    FILLER_CUSTOMER_COUNT,
+    DemoDataset,
+    generate_demo,
+)
 from bfs_bot.models import (
     Customer,
     DiscountCode,
@@ -93,7 +96,7 @@ def main() -> None:
         f"{len(dataset.customers)} customers, "
         f"{len(dataset.invoices)} invoices, "
         f"{len(dataset.policy_chunks)} policy chunks "
-        f"(filler target {settings.seed_customer_count} additional customers)."
+        f"({FILLER_CUSTOMER_COUNT} filler + 7 named customers)."
     )
 
 

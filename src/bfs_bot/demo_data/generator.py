@@ -40,6 +40,7 @@ class InvoiceRow:
     discount_amt: Decimal
     late_fee: Decimal
     net: Decimal
+    paid_on: date | None = None
 
 
 @dataclass(frozen=True)
@@ -288,6 +289,7 @@ def _generate_filler_invoices(
                 discount_amt=discount_amt,
                 late_fee=late_fee,
                 net=net,
+                paid_on=paid_on,
             )
         )
         next_serial += 1
@@ -349,6 +351,9 @@ def _payments_for_invoices(invoices: list[InvoiceRow]) -> list[PaymentRow]:
     for invoice in invoices:
         if invoice.invoice_id in NAMED_PAYMENT_OVERRIDES:
             paid_on, amount = NAMED_PAYMENT_OVERRIDES[invoice.invoice_id]
+        elif invoice.paid_on is not None:
+            paid_on = invoice.paid_on
+            amount = invoice.net
         else:
             paid_on = invoice.due_date
             amount = invoice.net
