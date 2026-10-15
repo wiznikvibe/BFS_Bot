@@ -1,123 +1,101 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
-import random
-
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from bfs_bot.config import settings
 from bfs_bot.database import SessionLocal, create_schema
-from bfs_bot.models import CreditAccount, SMECustomer, SupportCase, Transaction
-
-try:
-    from faker import Faker
-except Exception:  # pragma: no cover - production dependency, fallback for lean envs
-    Faker = None
-
-
-INDUSTRIES = [
-    "Packaging and wholesale supplies",
-    "Restaurant supplies",
-    "Electronics distribution",
-    "Textile trading",
-    "Pharmacy retail",
-    "Automotive spares",
-]
-REGIONS = ["Mumbai", "Pune", "Bengaluru", "Delhi NCR", "Hyderabad", "Chennai"]
-RISK_TIERS = ["A", "B", "C"]
+from bfs_bot.demo_data.generator import DemoDataset, generate_demo
+from bfs_bot.models import (
+    Customer,
+    DiscountCode,
+    Invoice,
+    Payment,
+    PolicyChunk,
+)
 
 
-def seed_customers(session: Session, count: int) -> None:
-    if session.scalar(select(SMECustomer).limit(1)):
-        return
-
-    fake = Faker("en_IN") if Faker else None
-    rng = random.Random(42)
-    for index in range(count):
-        serial = 10000 + index
-        customer = SMECustomer(
-            customer_id=f"SME-{serial}",
-            business_name=_company(fake, serial),
-            contact_name=_name(fake, serial),
-            email=f"owner{serial}@example-sme.test",
-            phone=f"+91 9{rng.randint(1000, 9999)} {rng.randint(10000, 99999)}",
-            pan=f"ABCDE{serial % 9000 + 1000}F",
-            gstin=f"27ABCDE{serial % 9000 + 1000}F1Z5",
-            registered_address=_address(fake, serial),
-            industry=rng.choice(INDUSTRIES),
-            region=rng.choice(REGIONS),
-            risk_tier=rng.choice(RISK_TIERS),
-        )
-        session.add(customer)
-        session.flush()
-
-        credit_limit = rng.choice([100000, 150000, 250000, 500000, 750000])
-        utilized = rng.randint(0, int(credit_limit * 0.85 / 500)) * 500
-        overdue = 0 if rng.random() > 0.2 else rng.randint(1, 20) * 1000
+def persist_demo_dataset(session: Session, dataset: DemoDataset) -> None:
+    _clear_demo_tables(session)
+    for row in dataset.customers:
         session.add(
-            CreditAccount(
-                customer_id=customer.id,
-                lender_name="Partner NBFC Demo",
-                account_status="active" if overdue == 0 else "watchlist",
-                credit_limit=credit_limit,
-                utilized_amount=utilized,
-                available_limit=credit_limit - utilized,
-                overdue_amount=overdue,
-                next_due_date=date.today() + timedelta(days=rng.randint(3, 45)),
+            Customer(
+                customer_id=row.customer_id,
+                name=row.name,
+                signup_date=row.signup_date,
+                plan=row.plan,
+                status=row.status,
             )
         )
-        for txn_index in range(3):
-            amount = rng.randint(10, 120) * 1000
-            session.add(
-                Transaction(
-                    customer_id=customer.id,
-                    invoice_number=f"INV-{serial}-{txn_index + 1}",
-                    supplier_name=f"Supplier {rng.choice(['Alpha', 'Nava', 'Metro', 'Prime'])}",
-                    invoice_amount=amount,
-                    due_date=date.today() + timedelta(days=rng.randint(7, 60)),
-                    repayment_status=rng.choice(["pending", "paid", "partially_paid"]),
-                )
+    session.flush()
+    for row in dataset.discount_codes:
+        session.add(
+            DiscountCode(
+                discount_code=row.discount_code,
+                policy_id=row.policy_id,
             )
-        if rng.random() < 0.35:
-            session.add(
-                SupportCase(
-                    customer_id=customer.id,
-                    case_number=f"CASE-{serial}",
-                    category=rng.choice(["grievance", "repayment", "limit_review"]),
-                    status=rng.choice(["open", "in_review", "resolved"]),
-                    opened_at=datetime.utcnow() - timedelta(days=rng.randint(1, 20)),
-                    summary="Dummy support case for PoC agent routing.",
-                )
+        )
+    for row in dataset.invoices:
+        session.add(
+            Invoice(
+                invoice_id=row.invoice_id,
+                customer_id=row.customer_id,
+                invoice_date=row.invoice_date,
+                due_date=row.due_date,
+                gross=row.gross,
+                discount_code=row.discount_code,
+                discount_amt=row.discount_amt,
+                late_fee=row.late_fee,
+                net=row.net,
             )
+        )
+    session.flush()
+    for row in dataset.payments:
+        session.add(
+            Payment(
+                payment_id=row.payment_id,
+                invoice_id=row.invoice_id,
+                paid_on=row.paid_on,
+                amount=row.amount,
+            )
+        )
+    for row in dataset.policy_chunks:
+        session.add(
+            PolicyChunk(
+                doc_id=row.doc_id,
+                version=row.version,
+                section=row.section,
+                effective_from=row.effective_from,
+                effective_to=row.effective_to,
+                text=row.text,
+                embedding=row.embedding,
+                is_injection_probe=row.is_injection_probe,
+            )
+        )
     session.commit()
 
 
-def _company(fake: object | None, serial: int) -> str:
-    if fake:
-        return fake.company()
-    return f"Demo SME Trading {serial}"
-
-
-def _name(fake: object | None, serial: int) -> str:
-    if fake:
-        return fake.name()
-    return f"Owner {serial}"
-
-
-def _address(fake: object | None, serial: int) -> str:
-    if fake:
-        return fake.address().replace("\n", ", ")
-    return f"{serial % 200 + 1} Market Road, Pune"
+def _clear_demo_tables(session: Session) -> None:
+    session.query(Payment).delete()
+    session.query(Invoice).delete()
+    session.query(DiscountCode).delete()
+    session.query(PolicyChunk).delete()
+    session.query(Customer).delete()
+    session.flush()
 
 
 def main() -> None:
     create_schema()
+    dataset = generate_demo(seed=42)
     with SessionLocal() as session:
-        seed_customers(session, settings.seed_customer_count)
-    print(f"Seeded dummy customer data if database was empty ({settings.seed_customer_count} target records).")
+        persist_demo_dataset(session, dataset)
+    print(
+        "Seeded hybrid RAG payments demo: "
+        f"{len(dataset.customers)} customers, "
+        f"{len(dataset.invoices)} invoices, "
+        f"{len(dataset.policy_chunks)} policy chunks "
+        f"(filler target {settings.seed_customer_count} additional customers)."
+    )
 
 
 if __name__ == "__main__":
     main()
-
