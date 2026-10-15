@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from importlib.resources import files
 from uuid import uuid4
 
@@ -11,8 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from bfs_bot.agents.policy import PolicyRetrievalAgent
+from bfs_bot.agents.structured import StructuredDataAgent
+from bfs_bot.agents.supervisor import Supervisor
+from bfs_bot.agents.tools_sql import StructuredSqlTools
 from bfs_bot.config import settings
-from bfs_bot.database import create_schema, get_session
+from bfs_bot.database import SessionLocal, create_schema, get_session
+from bfs_bot.guardrails import ReadonlyQueryExecutor
+from bfs_bot.schemas import AnswerResponse
 from bfs_bot.demo_auth import (
     authenticate,
     get_account_by_customer_id,
@@ -30,6 +37,21 @@ class AskRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=64)
+
+
+def build_supervisor(session_factory=SessionLocal) -> Supervisor:
+    executor = ReadonlyQueryExecutor(session_factory)
+    tools = StructuredSqlTools(executor)
+    return Supervisor(
+        structured=StructuredDataAgent(tools),
+        policy=PolicyRetrievalAgent(session_factory),
+    )
+
+
+def answer_response_to_dict(response: AnswerResponse) -> dict:
+    payload = asdict(response)
+    payload["redaction"] = asdict(response.redaction)
+    return payload
 
 
 def resolve_customer_id(
@@ -112,26 +134,22 @@ def me(request: Request) -> dict:
 
 @app.post("/api/ask")
 def ask(request_body: AskRequest, request: Request) -> dict:
-    """Temporary stub until payments multi-agent path lands (Task 9+)."""
     bound_customer_id = resolve_session_customer(request)
-    _ = resolve_customer_id(
+    resolved = resolve_customer_id(
         request_body.question,
         request_body.customer_id,
         bound_customer_id,
     )
+    if not resolved:
+        raise HTTPException(status_code=401, detail="Login required to ask questions.")
+
+    supervisor = build_supervisor()
+    response = supervisor.answer(request_body.question, customer_id=resolved)
     query_id = str(uuid4())
-    return {
-        "query_id": query_id,
-        "resolved_customer_id": bound_customer_id,
-        "answer": (
-            "Ask pipeline not wired for payments yet; your session remains scoped to "
-            f"{bound_customer_id}."
-        ),
-        "escalate": False,
-        "route": "stub",
-        "citations": [],
-        "trace": [],
-    }
+    body = answer_response_to_dict(response)
+    body["query_id"] = query_id
+    body["resolved_customer_id"] = resolved
+    return body
 
 
 @app.get("/api/demo-customers")
