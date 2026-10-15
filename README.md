@@ -57,7 +57,24 @@ Sign in, pick a persona chip (optional), and ask. The **session customer always 
 | `bfs-bot-ingest` | Fetch/chunk/store policy documents |
 | `bfs-bot-api` | FastAPI app + static UI |
 | `pytest` | Unit/integration tests |
-| `pytest -m eval -q` | Scenario matrix (C001–C007 + policy/data-only) + security probes |
+| `pytest -m eval -v` | Scenario matrix + security probes (sign-off) |
+| `python -m bfs_bot.eval_report` | Same as `pytest -m eval -v`, with a printed matrix/probe inventory |
+
+## Evaluation
+
+Run before marking post-M1 milestones complete. The **`eval`** pytest marker exercises the full **scenario matrix** (C001–C007, `policy_only`, `data_only`) and **security probes** (isolation, injection, write attempt, missing policy).
+
+```bash
+pytest -m eval -v
+```
+
+Optional wrapper (lists scenarios/probes, then delegates to pytest):
+
+```bash
+python -m bfs_bot.eval_report
+```
+
+All eval tests use in-memory SQLite with seeded C001–C007 data and ingested policies — no Docker or LLM keys required.
 
 ## API sketch
 
