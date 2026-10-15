@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from bfs_bot.agents.policy import PolicyRetrievalAgent, PolicyResult
+from bfs_bot.agents.policy import PolicyPassage, PolicyRetrievalAgent, PolicyResult
+from bfs_bot.audit import AuditLogger, SupervisorAuditEvent
 from bfs_bot.agents.reasoner import compare_loyalty_eligibility
 from bfs_bot.agents.structured import DataResult, StructuredDataAgent
 from bfs_bot.guardrails import CrossUserScopeError
@@ -77,9 +78,11 @@ class Supervisor:
         *,
         structured: StructuredDataAgent,
         policy: PolicyRetrievalAgent,
+        audit: AuditLogger | None = None,
     ) -> None:
         self._structured = structured
         self._policy = policy
+        self._audit = audit
 
     def answer(
         self,
@@ -138,7 +141,7 @@ class Supervisor:
             policy_citations = _policy_citations_from_passages(
                 policy_result.passages if policy_result else []
             )
-            return AnswerResponse(
+            response = AnswerResponse(
                 answer=answer,
                 route=route,
                 confidence=0.8,
@@ -147,6 +150,17 @@ class Supervisor:
                 escalate=False,
                 trace=trace,
             )
+            tool_calls = _tool_calls_from_data(data_result)
+            passages = policy_result.passages if policy_result else []
+            self._persist_audit(
+                question=question,
+                customer_id=customer_id,
+                as_of=as_of,
+                response=response,
+                tool_calls=tool_calls,
+                policy_passages=passages,
+            )
+            return response
         except CrossUserScopeError as exc:
             trace.append(
                 AgentStep(
@@ -155,13 +169,23 @@ class Supervisor:
                     detail="Cross-customer scope blocked.",
                 )
             )
-            return AnswerResponse(
+            response = AnswerResponse(
                 answer=str(exc),
                 route=route,
                 confidence=1.0,
                 escalate=False,
                 trace=trace,
             )
+            self._persist_audit(
+                question=question,
+                customer_id=customer_id,
+                as_of=as_of,
+                response=response,
+                tool_calls=[],
+                policy_passages=[],
+                status="blocked",
+            )
+            return response
 
     def _answer_loyalty_hybrid(
         self,
@@ -200,14 +224,25 @@ class Supervisor:
             ]
         )
 
+        tool_calls = _tool_calls_from_results(customer_result, invoice_result)
+
         if not customer_result.rows:
-            return AnswerResponse(
+            response = AnswerResponse(
                 answer=f"No customer record found for {customer_id}.",
                 route=route,
                 confidence=0.2,
                 escalate=False,
                 trace=trace,
             )
+            self._persist_audit(
+                question=question,
+                customer_id=customer_id,
+                as_of=as_of,
+                response=response,
+                tool_calls=tool_calls,
+                policy_passages=policy_result.passages,
+            )
+            return response
 
         customer = customer_result.rows[0]
         invoice = invoice_result.rows[0] if invoice_result.rows else None
@@ -219,7 +254,7 @@ class Supervisor:
         )
         trace.extend(compared.trace)
 
-        return AnswerResponse(
+        response = AnswerResponse(
             answer=compared.answer,
             route=route,
             confidence=compared.confidence,
@@ -227,6 +262,41 @@ class Supervisor:
             policy_citations=compared.policy_citations,
             escalate=compared.escalate,
             trace=trace,
+        )
+        self._persist_audit(
+            question=question,
+            customer_id=customer_id,
+            as_of=as_of,
+            response=response,
+            tool_calls=tool_calls,
+            policy_passages=policy_result.passages,
+        )
+        return response
+
+    def _persist_audit(
+        self,
+        *,
+        question: str,
+        customer_id: str,
+        as_of: date,
+        response: AnswerResponse,
+        tool_calls: list[dict[str, Any]],
+        policy_passages: list[PolicyPassage],
+        status: str = "completed",
+    ) -> None:
+        if self._audit is None:
+            return
+        self._audit.record(
+            SupervisorAuditEvent(
+                question=question,
+                customer_id=customer_id,
+                route=response.route,
+                answer=response.answer,
+                tool_calls=tool_calls,
+                policy_chunk_ids=self._audit.resolve_policy_chunk_ids(policy_passages),
+                as_of=as_of,
+                status=status,
+            )
         )
 
     @staticmethod
@@ -250,6 +320,20 @@ class Supervisor:
         if not parts:
             return "I could not find enough data or policy context to answer."
         return " ".join(parts)
+
+
+def _tool_calls_from_data(data_result: DataResult | None) -> list[dict[str, Any]]:
+    if not data_result or not data_result.tools:
+        return []
+    tool = data_result.tools[0]
+    return [{"tool": tool, "params": dict(data_result.bound_params)}]
+
+
+def _tool_calls_from_results(*results: DataResult) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for result in results:
+        calls.extend(_tool_calls_from_data(result))
+    return calls
 
 
 def _data_citations_from_rows(data_result: DataResult | None) -> list[DataCitation]:
