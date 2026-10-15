@@ -19,6 +19,24 @@ def hash_embedding(text: str, dimensions: int = 384) -> list[float]:
     return [value / norm for value in vector]
 
 
+def normalize_embedding(value: object) -> list[float]:
+    """Accept list/tuple/str embeddings from JSON or vector drivers."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            stripped = stripped[1:-1]
+        if not stripped:
+            return []
+        return [float(part) for part in stripped.split(",")]
+    if isinstance(value, (list, tuple)):
+        return [float(part) for part in value]
+    if hasattr(value, "tolist"):
+        return [float(part) for part in value.tolist()]
+    return [float(part) for part in list(value)]  # type: ignore[arg-type]
+
+
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 

@@ -1,102 +1,85 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from io import BytesIO
 import re
+from datetime import date
+from typing import Iterable, Protocol, runtime_checkable
 
-import httpx
-from bs4 import BeautifulSoup
-from sqlalchemy import delete
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
 
-from bfs_bot.embeddings import hash_embedding
-from bfs_bot.models import PolicyDocumentChunk
+from bfs_bot.database import SessionLocal, create_schema
+from bfs_bot.demo_data.policies import PolicyChunkDraft, build_policy_chunk_drafts
+from bfs_bot.embeddings import cosine_similarity, hash_embedding, normalize_embedding
+from bfs_bot.models import PolicyChunk
 
 
-@dataclass(frozen=True)
-class PolicySource:
-    title: str
-    url: str
+@runtime_checkable
+class PolicyChunkInput(Protocol):
+    doc_id: str
+    version: str
+    section: str
+    effective_from: date
+    effective_to: date | None
+    text: str
+    is_injection_probe: bool
 
 
-POLICY_SOURCES = [
-    PolicySource("Privacy Policy", "https://www.epaylater.in/privacy.html"),
-    PolicySource("Terms and Conditions", "https://www.epaylater.in/terms_and_conditions.html"),
-    PolicySource("Grievance Redressal Policy", "https://www.epaylater.in/grievance-redressal-policy.html"),
-    PolicySource("Collection Agencies", "https://www.epaylater.in/Collection_Agencies.pdf"),
-]
-
-BUILTIN_POLICY_SUMMARIES = {
-    "Privacy Policy": (
-        "Customer information should be collected and used for stated service, compliance, "
-        "risk, communication, fraud-prevention, and support purposes. Access should be "
-        "limited to authorized processing needs, and customer information should be handled "
-        "with appropriate safeguards."
-    ),
-    "Terms and Conditions": (
-        "The service facilitates credit or deferred payment terms through regulated lending "
-        "partners. Customers remain responsible for repayment obligations, dues, charges, "
-        "and account conduct according to applicable terms."
-    ),
-    "Grievance Redressal Policy": (
-        "Complaints should be acknowledged, tracked, investigated, and escalated through "
-        "the stated grievance redressal channels when unresolved within the expected window."
-    ),
-    "Collection Agencies": (
-        "Collection activity should be handled through authorized agencies and should follow "
-        "appropriate conduct, limited disclosure, and documented engagement practices."
-    ),
-}
-
-
-def ingest_policy_sources(session: Session, sources: list[PolicySource] = POLICY_SOURCES) -> int:
-    session.execute(delete(PolicyDocumentChunk))
+def ingest_policies(session: Session, chunks: Iterable[PolicyChunkInput]) -> int:
+    """Embed and persist policy chunks; replaces existing policy_chunks rows."""
+    session.execute(delete(PolicyChunk))
     inserted = 0
-    with httpx.Client(timeout=20.0, follow_redirects=False) as client:
-        for source in sources:
-            try:
-                text = fetch_policy_text(client, source)
-            except Exception:
-                text = BUILTIN_POLICY_SUMMARIES[source.title]
-            for chunk_index, chunk in enumerate(chunk_text(text), start=1):
-                session.add(
-                    PolicyDocumentChunk(
-                        chunk_id=f"{slugify(source.title)}-{chunk_index:03d}",
-                        title=source.title,
-                        section=infer_section(chunk),
-                        source_url=source.url,
-                        text=chunk,
-                        embedding=hash_embedding(chunk),
-                    )
-                )
-                inserted += 1
+    for chunk in chunks:
+        session.add(
+            PolicyChunk(
+                doc_id=chunk.doc_id,
+                version=chunk.version,
+                section=chunk.section,
+                effective_from=chunk.effective_from,
+                effective_to=chunk.effective_to,
+                text=chunk.text,
+                embedding=hash_embedding(chunk.text),
+                is_injection_probe=chunk.is_injection_probe,
+            )
+        )
+        inserted += 1
     session.commit()
     return inserted
 
 
-def fetch_policy_text(client: httpx.Client, source: PolicySource) -> str:
-    response = client.get(source.url)
-    response.raise_for_status()
-    content_type = response.headers.get("content-type", "")
-    if source.url.lower().endswith(".pdf") or "pdf" in content_type:
-        return extract_pdf_text(response.content)
-    return extract_html_text(response.text)
+def effective_on(as_of: date):
+    """SQL filter: chunk effective window contains as_of (inclusive)."""
+    return and_(
+        PolicyChunk.effective_from <= as_of,
+        or_(PolicyChunk.effective_to.is_(None), PolicyChunk.effective_to >= as_of),
+    )
 
 
-def extract_html_text(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer"]):
-        tag.decompose()
-    return normalize_whitespace(soup.get_text(" "))
-
-
-def extract_pdf_text(content: bytes) -> str:
-    try:
-        from pypdf import PdfReader
-    except Exception as exc:  # pragma: no cover - dependency available after install
-        raise RuntimeError("Install the pypdf dependency to ingest PDF policy documents.") from exc
-    reader = PdfReader(BytesIO(content))
-    return normalize_whitespace(" ".join(page.extract_text() or "" for page in reader.pages))
+def retrieve_policy_chunks(
+    session: Session,
+    query: str,
+    *,
+    as_of: date,
+    limit: int = 4,
+    doc_id: str | None = None,
+    include_injection_probes: bool = False,
+) -> list[PolicyChunk]:
+    """Rank stored chunks by embedding similarity, scoped to the as_of effective window."""
+    query_embedding = hash_embedding(query)
+    stmt = select(PolicyChunk).where(effective_on(as_of))
+    if doc_id is not None:
+        stmt = stmt.where(PolicyChunk.doc_id == doc_id)
+    if not include_injection_probes:
+        stmt = stmt.where(PolicyChunk.is_injection_probe.is_(False))
+    rows = list(session.scalars(stmt).all())
+    ranked = sorted(
+        rows,
+        key=lambda row: cosine_similarity(
+            query_embedding,
+            normalize_embedding(row.embedding),
+        ),
+        reverse=True,
+    )
+    return ranked[:limit]
 
 
 def chunk_text(text: str, max_words: int = 180, overlap: int = 30) -> list[str]:
@@ -112,28 +95,17 @@ def chunk_text(text: str, max_words: int = 180, overlap: int = 30) -> list[str]:
     return chunks
 
 
-def infer_section(chunk: str) -> str:
-    words = chunk.split()[:8]
-    return " ".join(words).strip(" :-") or "General"
-
-
-def normalize_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
-
 def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
 def main() -> None:
-    from bfs_bot.database import SessionLocal, create_schema
-
     create_schema()
+    drafts: list[PolicyChunkDraft] = build_policy_chunk_drafts()
     with SessionLocal() as session:
-        count = ingest_policy_sources(session)
+        count = ingest_policies(session, drafts)
     print(f"Ingested {count} policy chunks.")
 
 
 if __name__ == "__main__":
     main()
-
