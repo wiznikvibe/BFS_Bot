@@ -3,22 +3,68 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BFS Bot SME Credit Assistant</title>
+    <title>BFS Bot — Payments + Policy Q&amp;A</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div class="atmosphere" aria-hidden="true"></div>
     <main class="shell" aria-labelledby="page-title">
       <section class="workspace">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">SME credit PoC</p>
-            <h1 id="page-title">BFS Bot Assistant</h1>
+        <header class="topbar reveal">
+          <div class="brand-block">
+            <p class="eyebrow">Hybrid RAG PoC</p>
+            <h1 id="page-title">Payments + Policy Assistant</h1>
+            <p class="tagline">
+              Session-scoped customer facts, versioned policy retrieval, and cited hybrid answers for C001–C007.
+            </p>
           </div>
-          <span class="status-pill" aria-live="polite">PII redaction enforced</span>
+          <div class="topbar-meta">
+            <span class="status-pill" aria-live="polite">Read-only · session scoped</span>
+            <span id="session-badge" class="session-badge" aria-live="polite">Not signed in</span>
+          </div>
         </header>
 
-        <form id="ask-form" class="query-panel" aria-label="Ask a question about SME credit or policy">
-          <label for="question">Ask about a synthetic SME customer or policy</label>
+        <section class="auth-panel reveal" aria-label="Demo login">
+          <div class="auth-copy">
+            <h2>Demo login</h2>
+            <p id="auth-hint">
+              Sign in to bind a customer ID (C001–C007). Cross-customer IDs in questions are ignored; lookup by PII is
+              blocked.
+            </p>
+          </div>
+          <form id="login-form" class="login-form">
+            <label class="sr-only" for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" placeholder="Username" required />
+            <label class="sr-only" for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Password"
+              required
+            />
+            <button type="submit" id="login-button">Sign in</button>
+            <button type="button" id="logout-button" class="ghost-button" hidden>Sign out</button>
+          </form>
+        </section>
+
+        <section class="persona-strip reveal" aria-label="Demo customer personas C001 through C007">
+          <div class="persona-heading">
+            <h2>Personas</h2>
+            <p id="persona-hint">Loading C001–C007 demo customers…</p>
+          </div>
+          <div id="persona-chips" class="persona-chips" role="list"></div>
+        </section>
+
+        <form id="ask-form" class="query-panel reveal" aria-label="Ask a payments or policy question">
+          <label for="question">Question for the signed-in customer</label>
           <div class="input-row">
             <textarea
               id="question"
@@ -27,32 +73,53 @@
               maxlength="800"
               required
               aria-describedby="question-hint"
-            >For SME-10023, what is the available limit and which privacy policy point applies?</textarea>
-            <button type="submit">Ask</button>
+            >Why no 10% loyalty discount?</textarea>
+            <button type="submit" id="ask-button">Ask</button>
           </div>
-          <p id="customer-hint" class="hint" role="status">Loading sample customer IDs...</p>
+          <p id="question-hint" class="hint" role="status">
+            Login is required. The session customer wins over any ID in the question or request body.
+          </p>
         </form>
 
+        <div id="escalate-banner" class="escalate-banner reveal" hidden role="alert">
+          <strong>Escalate to human</strong>
+          <span id="escalate-detail">The assistant flagged a billing or policy anomaly.</span>
+        </div>
+
         <section class="answer-grid" aria-live="polite">
-          <article class="panel answer-panel">
-            <h2>Answer</h2>
-            <p id="answer">Submit a query to run the multi-agent flow.</p>
+          <article class="panel answer-panel reveal">
+            <div class="answer-header">
+              <h2>Answer</h2>
+              <div class="route-meta" id="route-meta" hidden>
+                <span id="route-badge" class="route-badge">hybrid</span>
+                <span id="confidence-badge" class="confidence-badge">confidence —</span>
+                <span id="resolved-meta" class="resolved-meta"></span>
+              </div>
+            </div>
+            <p id="answer">Sign in and submit a query to run the supervisor flow.</p>
           </article>
 
-          <article class="panel">
-            <h2>Redacted Customer Context</h2>
-            <pre id="redacted-context" class="context-block">No customer context yet.</pre>
+          <article class="panel reveal">
+            <h2>Data citations</h2>
+            <ul id="data-citations" class="list citation-list" role="list">
+              <li>No structured data citations.</li>
+            </ul>
           </article>
 
-          <article class="panel">
-            <h2>Policy Citations</h2>
-            <ul id="citations" class="list" role="list">
+          <article class="panel reveal">
+            <h2>Policy citations</h2>
+            <ul id="policy-citations" class="list citation-list" role="list">
               <li>No policy citations.</li>
             </ul>
           </article>
 
-          <article class="panel">
-            <h2>Agent Trace</h2>
+          <article class="panel reveal">
+            <h2>Redacted context</h2>
+            <pre id="redacted-context" class="context-block">No customer context yet.</pre>
+          </article>
+
+          <article class="panel reveal trace-panel">
+            <h2>Agent trace</h2>
             <ol id="trace" class="trace-list" role="list">
               <li class="trace-item">No trace yet.</li>
             </ol>
