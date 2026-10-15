@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_model: str = "free-tier-model"
     seed_customer_count: int = 200
+    session_secret: str = "bfs-bot-local-dev-session-secret"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
